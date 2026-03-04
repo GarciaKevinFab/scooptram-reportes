@@ -1,0 +1,341 @@
+{
+  "name": "Reporte SCOOPTRAM - Procesamiento v2",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "reporte-scooptram",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        },
+        "httpMethod": "POST"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Recibir Reporte",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// NODO COMBINADO: Preparar imagen + Llamar Claude Vision API\nconst item = $input.first();\n\n// 1. Verificar que llegó la imagen\nif (!item.binary || !item.binary.imagen) {\n  return [{\n    json: {\n      content: [{ text: JSON.stringify({\n        error: true,\n        encabezado: { fecha: '???', mina: '???', guardia: '???', empresa: '???', equipo_codigo: '???', veta: '???', numero_correlativo: '???' },\n        horometros: { macro: null, inicial: null, final: null, tipo_combustible: '?' },\n        actividades: [],\n        operador: { nombre: '???', datos: '', horometro: null },\n        observaciones_generales: '',\n        fallas: [],\n        firmas_presentes: { jefe_guardia_ecm: false, jefe_guardia_volcan: false, tecnico_mantenimiento: false, residente_ecm: false, supervisor_mantenimiento: false },\n        tipo_copia: '???',\n        confianza_global: 0\n      }) }]\n    }\n  }];\n}\n\n// 2. Leer binario como base64\nconst binaryData = await this.helpers.getBinaryDataBuffer('imagen');\nconst base64Image = binaryData.toString('base64');\nconst mimeType = item.binary.imagen.mimeType || 'image/jpeg';\n\n// 3. Prompt para Claude Vision\nconst prompt = `Eres un sistema experto en extracción de datos de reportes operativos mineros. Analiza esta imagen del \"Reporte de Operación de Equipos: SCOOPTRAM\" de la minera Volcán.\n\nIMPORTANTE:\n- El formato está rotado 90° (landscape). El título está en el borde derecho.\n- Los datos están escritos A MANO con bolígrafo, puede haber letra difícil.\n- Si no puedes leer un campo con certeza, coloca \"???\" y agrega confianza baja.\n- Las horas están en formato HH:MM (24h).\n- Los horómetros son números decimales.\n- Los códigos de actividad comunes son: 120, 122, 123, 200, 202, 203, 262, 301, 302, M05, 191, 193.\n\nEXTRAE y devuelve ÚNICAMENTE un JSON válido con esta estructura exacta (sin texto adicional, sin markdown, sin explicaciones):\n\n{\n  \"encabezado\": { \"mina\": \"string\", \"fecha\": \"YYYY-MM-DD\", \"guardia\": \"DIA|NOCHE\", \"empresa\": \"string\", \"equipo_codigo\": \"string\", \"veta\": \"string\", \"numero_correlativo\": \"string\" },\n  \"horometros\": { \"macro\": \"number|null\", \"inicial\": \"number\", \"final\": \"number\", \"tipo_combustible\": \"D|E\" },\n  \"actividades\": [{ \"fila\": \"int\", \"hora_inicio\": \"HH:MM\", \"hora_final\": \"HH:MM\", \"cod_actividad\": \"string\", \"veta\": \"string\", \"origen_zona\": \"string\", \"origen_nivel\": \"string\", \"origen_labor\": \"string\", \"labor_ref\": \"string\", \"destino_zona\": \"string\", \"destino_nivel\": \"string\", \"destino_labor\": \"string\", \"material_md\": \"string\", \"num_viajes\": \"int|null\", \"dist_promedio\": \"number|null\", \"cod_equipo_transporte\": \"string\", \"num_cucharas\": \"int|null\", \"observaciones\": \"string\", \"confianza\": \"float 0-1\" }],\n  \"operador\": { \"nombre\": \"string\", \"datos\": \"string\", \"horometro\": \"number|null\" },\n  \"observaciones_generales\": \"string\",\n  \"fallas\": [{ \"no\": \"int\", \"nombre_sobrestante\": \"string\", \"sistema\": \"string\", \"sintoma\": \"string\", \"causa\": \"string\", \"horometro\": \"number|null\" }],\n  \"firmas_presentes\": { \"jefe_guardia_ecm\": \"bool\", \"jefe_guardia_volcan\": \"bool\", \"tecnico_mantenimiento\": \"bool\", \"residente_ecm\": \"bool\", \"supervisor_mantenimiento\": \"bool\" },\n  \"tipo_copia\": \"ORIGINAL|MANTENIMIENTO|CONTROL OPERATIVO\",\n  \"confianza_global\": \"float 0-1\"\n}\n\nSolo incluye filas de actividades que tengan datos escritos (ignora filas vacías).\nPara campos ilegibles usa \"???\" en strings y null en números.\nEl campo \"confianza\" por fila indica qué tan seguro estás de la lectura (0.0 a 1.0).`;\n\n// 4. Construir body del request\nconst requestBody = {\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 4096,\n  messages: [{\n    role: 'user',\n    content: [\n      {\n        type: 'image',\n        source: {\n          type: 'base64',\n          media_type: mimeType,\n          data: base64Image\n        }\n      },\n      {\n        type: 'text',\n        text: prompt\n      }\n    ]\n  }]\n};\n\n// 5. Llamar a Claude API usando httpRequest helper de n8n\nconst response = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://api.anthropic.com/v1/messages',\n  headers: {\n    'x-api-key': 'REEMPLAZAR_CON_TU_API_KEY',\n    'anthropic-version': '2023-06-01',\n    'Content-Type': 'application/json'\n  },\n  body: requestBody,\n  json: true,\n  timeout: 120000\n});\n\nreturn [{ json: response }];"
+      },
+      "id": "claude-vision-combined",
+      "name": "Claude Vision API",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parsear respuesta JSON de Claude\nconst item = $input.first();\nlet responseText = '';\n\ntry {\n  responseText = item.json.content[0].text;\n} catch (e) {\n  return [{\n    json: {\n      error: true,\n      message: 'No se pudo obtener texto de respuesta de Claude',\n      raw_response: JSON.stringify(item.json)\n    }\n  }];\n}\n\n// Limpiar posibles backticks de markdown\nconst cleanJson = responseText\n  .replace(/```json\\n?/g, '')\n  .replace(/```\\n?/g, '')\n  .trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleanJson);\n} catch (e) {\n  return [{\n    json: {\n      error: true,\n      message: 'Error parseando JSON de Claude: ' + e.message,\n      raw_response: responseText\n    }\n  }];\n}\n\nreturn [{ json: { ...parsed, error: false } }];"
+      },
+      "id": "parsear-json",
+      "name": "Parsear Respuesta JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validación de datos\nconst data = $input.first().json;\nconst errores = [];\nconst advertencias = [];\n\nif (data.error) {\n  return [{ json: { ...data, validacion_ok: false, validacion: { errores: [data.message], advertencias: [] } } }];\n}\n\n// 1. Fecha válida\nif (!data.encabezado || !data.encabezado.fecha || data.encabezado.fecha === '???') {\n  errores.push('Fecha no legible');\n}\n\n// 2. Horómetros\nconst hi = data.horometros ? data.horometros.inicial : null;\nconst hf = data.horometros ? data.horometros.final : null;\nif (hi !== null && hf !== null && hi !== undefined && hf !== undefined) {\n  if (hf < hi) {\n    errores.push(`Horómetro final (${hf}) menor que inicial (${hi})`);\n  }\n  const diff = Math.round((hf - hi) * 100) / 100;\n  if (diff > 24) {\n    advertencias.push(`Diferencia de horómetro (${diff}) mayor a 24h`);\n  }\n}\n\n// 3. Validar actividades\nconst actividades = data.actividades || [];\nif (actividades.length === 0) {\n  errores.push('No se extrajeron actividades del reporte');\n}\n\nconst codigosValidos = ['120','122','123','200','202','203','262','301','302','M05','191','193','HO5'];\n\nfor (const act of actividades) {\n  if (act.hora_inicio && act.hora_final) {\n    const [hiH, hiM] = act.hora_inicio.split(':').map(Number);\n    const [hfH, hfM] = act.hora_final.split(':').map(Number);\n    const inicioMin = hiH * 60 + hiM;\n    const finalMin = hfH * 60 + hfM;\n    if (finalMin <= inicioMin && inicioMin < 720) {\n      advertencias.push(`Fila ${act.fila}: Hora final <= hora inicio`);\n    }\n  }\n  if (act.cod_actividad && !codigosValidos.includes(act.cod_actividad) && act.cod_actividad !== '???') {\n    advertencias.push(`Fila ${act.fila}: Código actividad ${act.cod_actividad} no reconocido`);\n  }\n  if (act.confianza !== undefined && act.confianza !== null && act.confianza < 0.7) {\n    advertencias.push(`Fila ${act.fila}: Baja confianza de lectura (${(act.confianza * 100).toFixed(0)}%)`);\n  }\n}\n\n// 4. Confianza global\nif (data.confianza_global !== undefined && data.confianza_global < 0.6) {\n  errores.push('Confianza global muy baja, considerar reprocesar');\n}\n\n// 5. Operador\nif (!data.operador || !data.operador.nombre || data.operador.nombre === '???') {\n  advertencias.push('Nombre de operador no legible');\n}\n\ndata.validacion = { errores, advertencias };\ndata.validacion_ok = errores.length === 0;\n\nreturn [{ json: data }];"
+      },
+      "id": "validacion",
+      "name": "Validar Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-validacion",
+              "leftValue": "={{ $json.validacion_ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-validacion",
+      "name": "IF - Validación OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Preparar fila para hoja encabezados\nconst data = $input.first().json;\nconst hi = data.horometros ? data.horometros.inicial : null;\nconst hf = data.horometros ? data.horometros.final : null;\nconst diff = (hi !== null && hf !== null) ? Math.round((hf - hi) * 100) / 100 : null;\n\nreturn [{\n  json: {\n    fecha_procesamiento: new Date().toISOString(),\n    numero_correlativo: data.encabezado ? data.encabezado.numero_correlativo : '',\n    fecha: data.encabezado ? data.encabezado.fecha : '',\n    guardia: data.encabezado ? data.encabezado.guardia : '',\n    empresa: data.encabezado ? data.encabezado.empresa : '',\n    equipo_codigo: data.encabezado ? data.encabezado.equipo_codigo : '',\n    veta: data.encabezado ? data.encabezado.veta : '',\n    horometro_inicial: hi,\n    horometro_final: hf,\n    horometro_diferencia: diff,\n    tipo_combustible: data.horometros ? data.horometros.tipo_combustible : '',\n    nombre_operador: data.operador ? data.operador.nombre : '',\n    observaciones_generales: data.observaciones_generales || '',\n    tipo_copia: data.tipo_copia || '',\n    confianza_global: data.confianza_global || 0,\n    num_actividades: data.actividades ? data.actividades.length : 0,\n    num_errores: data.validacion ? data.validacion.errores.length : 0,\n    num_advertencias: data.validacion ? data.validacion.advertencias.length : 0,\n    _datos_completos: data\n  }\n}];"
+      },
+      "id": "preparar-encabezado",
+      "name": "Preparar Encabezado Sheets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "encabezados"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": ["numero_correlativo"]
+        },
+        "options": {}
+      },
+      "id": "sheets-encabezado",
+      "name": "Sheets - Encabezados",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1660, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Expandir actividades como items individuales\nconst data = $input.first().json._datos_completos || $input.first().json;\nconst actividades = data.actividades || [];\nconst correlativo = data.encabezado ? data.encabezado.numero_correlativo : '';\nconst fecha = data.encabezado ? data.encabezado.fecha : '';\n\nreturn actividades.map(act => ({\n  json: {\n    numero_correlativo: correlativo,\n    fecha: fecha,\n    fila: act.fila,\n    hora_inicio: act.hora_inicio,\n    hora_final: act.hora_final,\n    cod_actividad: act.cod_actividad,\n    veta: act.veta,\n    origen_zona: act.origen_zona,\n    origen_nivel: act.origen_nivel,\n    origen_labor: act.origen_labor,\n    labor_ref: act.labor_ref,\n    destino_zona: act.destino_zona,\n    destino_nivel: act.destino_nivel,\n    destino_labor: act.destino_labor,\n    material_md: act.material_md,\n    num_viajes: act.num_viajes,\n    dist_promedio: act.dist_promedio,\n    cod_equipo_transporte: act.cod_equipo_transporte,\n    num_cucharas: act.num_cucharas,\n    observaciones: act.observaciones,\n    confianza: act.confianza\n  }\n}));"
+      },
+      "id": "expandir-actividades",
+      "name": "Expandir Actividades",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 400]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "actividades"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "sheets-actividades",
+      "name": "Sheets - Actividades",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1660, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Expandir fallas como items individuales\nconst data = $input.first().json._datos_completos || $input.first().json;\nconst fallas = data.fallas || [];\nconst correlativo = data.encabezado ? data.encabezado.numero_correlativo : '';\nconst fecha = data.encabezado ? data.encabezado.fecha : '';\n\nif (fallas.length === 0) {\n  return [];\n}\n\nreturn fallas.map(f => ({\n  json: {\n    numero_correlativo: correlativo,\n    fecha: fecha,\n    no_falla: f.no,\n    nombre_sobrestante: f.nombre_sobrestante,\n    sistema: f.sistema,\n    sintoma: f.sintoma,\n    causa: f.causa,\n    horometro: f.horometro\n  }\n}));"
+      },
+      "id": "expandir-fallas",
+      "name": "Expandir Fallas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 600]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "fallas"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "sheets-fallas",
+      "name": "Sheets - Fallas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1660, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Respuesta exitosa al webhook\nconst data = $input.first().json;\nconst datosCompletos = data._datos_completos || data;\n\nreturn [{\n  json: {\n    status: 'success',\n    numero_correlativo: datosCompletos.encabezado ? datosCompletos.encabezado.numero_correlativo : '',\n    actividades_procesadas: datosCompletos.actividades ? datosCompletos.actividades.length : 0,\n    advertencias: datosCompletos.validacion ? datosCompletos.validacion.advertencias : [],\n    confianza_global: datosCompletos.confianza_global || 0,\n    ...datosCompletos\n  }\n}];"
+      },
+      "id": "respuesta-exito",
+      "name": "Preparar Respuesta Éxito",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-exito",
+      "name": "Respond Éxito",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manejo de errores\nconst data = $input.first().json;\n\nreturn [{\n  json: {\n    status: 'error',\n    errores: data.validacion ? data.validacion.errores : [data.message || 'Error desconocido'],\n    advertencias: data.validacion ? data.validacion.advertencias : [],\n    sugerencia: 'Tomar nueva foto con mejor iluminación',\n    confianza_global: data.confianza_global || 0,\n    ...data\n  }\n}];"
+      },
+      "id": "manejo-error",
+      "name": "Preparar Respuesta Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 800]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "errores_procesamiento"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_procesamiento": "={{ new Date().toISOString() }}",
+            "numero_correlativo": "={{ $json.encabezado ? $json.encabezado.numero_correlativo : 'N/A' }}",
+            "tipo_error": "validacion",
+            "mensaje": "={{ JSON.stringify($json.errores || [$json.message]) }}",
+            "respuesta_cruda": "={{ $json.raw_response ? $json.raw_response.substring(0, 500) : '' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "sheets-errores",
+      "name": "Sheets - Log Errores",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1660, 800]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1880, 800]
+    }
+  ],
+  "connections": {
+    "Webhook - Recibir Reporte": {
+      "main": [
+        [{ "node": "Claude Vision API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Vision API": {
+      "main": [
+        [{ "node": "Parsear Respuesta JSON", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parsear Respuesta JSON": {
+      "main": [
+        [{ "node": "Validar Datos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validar Datos": {
+      "main": [
+        [{ "node": "IF - Validación OK?", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF - Validación OK?": {
+      "main": [
+        [
+          { "node": "Preparar Encabezado Sheets", "type": "main", "index": 0 },
+          { "node": "Expandir Actividades", "type": "main", "index": 0 },
+          { "node": "Expandir Fallas", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Preparar Respuesta Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Preparar Encabezado Sheets": {
+      "main": [
+        [{ "node": "Sheets - Encabezados", "type": "main", "index": 0 }]
+      ]
+    },
+    "Sheets - Encabezados": {
+      "main": [
+        [{ "node": "Preparar Respuesta Éxito", "type": "main", "index": 0 }]
+      ]
+    },
+    "Expandir Actividades": {
+      "main": [
+        [{ "node": "Sheets - Actividades", "type": "main", "index": 0 }]
+      ]
+    },
+    "Expandir Fallas": {
+      "main": [
+        [{ "node": "Sheets - Fallas", "type": "main", "index": 0 }]
+      ]
+    },
+    "Preparar Respuesta Éxito": {
+      "main": [
+        [{ "node": "Respond Éxito", "type": "main", "index": 0 }]
+      ]
+    },
+    "Preparar Respuesta Error": {
+      "main": [
+        [
+          { "node": "Sheets - Log Errores", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets - Log Errores": {
+      "main": [
+        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "scooptram" },
+    { "name": "reportes" },
+    { "name": "volcan" }
+  ]
+}
