@@ -1,4 +1,9 @@
-const N8N_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/reporte-scooptram';
+function getWebhookUrl() {
+  return localStorage.getItem('n8n_webhook_url')
+    || import.meta.env.VITE_N8N_WEBHOOK_URL
+    || 'http://localhost:5678/webhook/reporte-scooptram';
+}
+
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 export async function enviarReporte(imageFile, onProgress) {
@@ -21,7 +26,7 @@ export async function enviarReporte(imageFile, onProgress) {
 
   onProgress?.('analizando');
 
-  const response = await fetch(N8N_WEBHOOK_URL, {
+  const response = await fetch(getWebhookUrl(), {
     method: 'POST',
     headers,
     body: formData,
@@ -52,7 +57,7 @@ export async function enviarCorreccion(datosCorregidos) {
     headers['X-API-Key'] = API_KEY;
   }
 
-  const response = await fetch(`${N8N_WEBHOOK_URL}/correccion`, {
+  const response = await fetch(`${getWebhookUrl()}/correccion`, {
     method: 'POST',
     headers,
     body: JSON.stringify(datosCorregidos),

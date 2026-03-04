@@ -1,8 +1,9 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { Camera, List, FileText } from 'lucide-react';
+import { Camera, List, FileText, Settings } from 'lucide-react';
 import CapturaReporte from './pages/CapturaReporte';
 import ResultadoProcesamiento from './pages/ResultadoProcesamiento';
 import HistorialReportes from './pages/HistorialReportes';
+import Configuracion from './pages/Configuracion';
 
 function Layout({ children }) {
   return (
@@ -51,6 +52,19 @@ function Layout({ children }) {
               <List className="w-4 h-4" />
               <span className="hidden sm:inline">Historial</span>
             </NavLink>
+            <NavLink
+              to="/config"
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-primary text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`
+              }
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Config</span>
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -68,12 +82,13 @@ function Layout({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/scooptram-reportes">
       <Layout>
         <Routes>
           <Route path="/" element={<CapturaReporte />} />
           <Route path="/resultado" element={<ResultadoProcesamiento />} />
           <Route path="/historial" element={<HistorialReportes />} />
+          <Route path="/config" element={<Configuracion />} />
         </Routes>
       </Layout>
     </BrowserRouter>
