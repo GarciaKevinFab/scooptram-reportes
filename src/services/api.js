@@ -6,6 +6,21 @@ function getWebhookUrl() {
 
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
+// Agrega headers especiales para túneles (localtunnel, ngrok)
+function getTunnelHeaders() {
+  const url = getWebhookUrl();
+  const extra = {};
+  // localtunnel requiere este header para bypass de la página de confirmación
+  if (url.includes('.loca.lt')) {
+    extra['Bypass-Tunnel-Reminder'] = 'true';
+  }
+  // ngrok free requiere este header
+  if (url.includes('ngrok')) {
+    extra['ngrok-skip-browser-warning'] = 'true';
+  }
+  return extra;
+}
+
 export async function enviarReporte(imageFile, onProgress) {
   onProgress?.('enviando');
 
@@ -19,7 +34,7 @@ export async function enviarReporte(imageFile, onProgress) {
     })
   );
 
-  const headers = {};
+  const headers = { ...getTunnelHeaders() };
   if (API_KEY) {
     headers['X-API-Key'] = API_KEY;
   }
@@ -52,6 +67,7 @@ export async function enviarReporte(imageFile, onProgress) {
 export async function enviarCorreccion(datosCorregidos) {
   const headers = {
     'Content-Type': 'application/json',
+    ...getTunnelHeaders(),
   };
   if (API_KEY) {
     headers['X-API-Key'] = API_KEY;

@@ -30,8 +30,16 @@ export default function Configuracion() {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
+      const headers = {};
+      if (url.includes('.loca.lt')) {
+        headers['Bypass-Tunnel-Reminder'] = 'true';
+      }
+      if (url.includes('ngrok')) {
+        headers['ngrok-skip-browser-warning'] = 'true';
+      }
       const response = await fetch(url, {
         method: 'GET',
+        headers,
         signal: controller.signal,
       });
       clearTimeout(timeout);
